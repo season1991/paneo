@@ -1,0 +1,2099 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI 多开浏览器 — 分屏对比原型</title>
+  <style>
+    /* =========================================================
+       Tokens — Tech / utility direction
+       ========================================================= */
+    :root {
+      --bg:        oklch(97% 0.004 250);
+      --surface:   oklch(100% 0 0);
+      --fg:        oklch(20% 0.018 250);
+      --muted:     oklch(50% 0.016 250);
+      --border:    oklch(89% 0.006 250);
+      --accent:    oklch(58% 0.16 145);
+      --accent-dim: oklch(58% 0.16 145 / 0.12);
+      --danger:    oklch(55% 0.22 25);
+      --warn:      oklch(68% 0.16 85);
+      --shell:     oklch(16% 0.012 250);
+
+      /* AI brand accents */
+      --ai-chatgpt:  oklch(55% 0.16 145);
+      --ai-claude:   oklch(55% 0.14 60);
+      --ai-gemini:   oklch(56% 0.18 250);
+      --ai-deepseek: oklch(55% 0.16 250);
+
+      --font-body:  -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', system-ui, sans-serif;
+      --font-mono:  'JetBrains Mono', 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+
+      --r:   8px;
+      --r-lg: 12px;
+      --gap: 10px;
+      --header-h: 52px;
+      --input-h:  68px;
+    }
+
+    /* =========================================================
+       Reset
+       ========================================================= */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--fg);
+      font: 13px/1.5 var(--font-body);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* =========================================================
+       App shell
+       ========================================================= */
+    .app {
+      display: grid;
+      grid-template-rows: var(--header-h) 1fr var(--input-h);
+      height: 100vh;
+      gap: 0;
+    }
+
+    /* =========================================================
+       Header
+       ========================================================= */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 1px 3px oklch(0% 0 0 / 0.04);
+      z-index: 10;
+    }
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -0.01em;
+      color: var(--fg);
+      white-space: nowrap;
+    }
+    .header-brand svg { flex-shrink: 0; }
+    .header-sep {
+      width: 1px;
+      height: 24px;
+      background: var(--border);
+    }
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .layout-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      background: var(--surface);
+      color: var(--muted);
+      font: 12px/1 var(--font-mono);
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: all 0.15s;
+      user-select: none;
+    }
+    .layout-btn:hover {
+      border-color: var(--accent);
+      color: var(--fg);
+    }
+    .layout-btn.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .header-spacer { flex: 1; }
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font: 11px/1 var(--font-mono);
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px; height: 32px;
+      border: none;
+      border-radius: var(--r);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .icon-btn:hover {
+      background: var(--accent-dim);
+      color: var(--fg);
+    }
+
+    /* =========================================================
+       Grid
+       ========================================================= */
+    .grid {
+      display: grid;
+      gap: var(--gap);
+      padding: var(--gap);
+      transition: grid-template-columns 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+    .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+    /* =========================================================
+       Panel — mini browser chrome
+       ========================================================= */
+    .panel[data-ai="chatgpt"]  { --panel-accent: var(--ai-chatgpt); }
+    .panel[data-ai="claude"]   { --panel-accent: var(--ai-claude); }
+    .panel[data-ai="gemini"]   { --panel-accent: var(--ai-gemini); }
+    .panel[data-ai="deepseek"] { --panel-accent: var(--ai-deepseek); }
+    .panel {
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      min-width: 0;
+      transition: box-shadow 0.2s;
+    }
+    .panel:hover {
+      box-shadow: 0 4px 16px oklch(0% 0 0 / 0.08);
+      border-color: oklch(from var(--panel-accent, var(--border)) l c h / 0.3);
+    }
+    .panel-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 38px;
+      padding: 0 12px;
+      background: oklch(97% 0.003 250);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      border-top: 2px solid var(--panel-accent, var(--border));
+    }
+    .panel-dots {
+      display: flex;
+      gap: 5px;
+    }
+    .panel-dots span {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      border: 1px solid oklch(0% 0 0 / 0.08);
+    }
+    .panel-dots span:nth-child(1) { background: oklch(70% 0.14 25); }
+    .panel-dots span:nth-child(2) { background: oklch(75% 0.14 90); }
+    .panel-dots span:nth-child(3) { background: oklch(68% 0.16 145); }
+    .panel-url {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font: 11px/1 var(--font-mono);
+      color: var(--muted);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .panel-url svg { flex-shrink: 0; color: var(--accent); }
+    .panel-actions {
+      display: flex;
+      gap: 2px;
+    }
+    .panel-actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px; height: 24px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .panel-actions button:hover {
+      background: oklch(0% 0 0 / 0.06);
+      color: var(--fg);
+    }
+
+    /* =========================================================
+       Chat content inside panel
+       ========================================================= */
+    .panel-chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 14px;
+      gap: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .panel-chat::-webkit-scrollbar { width: 5px; }
+    .panel-chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+    .panel-chat::-webkit-scrollbar-track { background: transparent; }
+
+    .msg {
+      display: flex;
+      gap: 8px;
+      max-width: 92%;
+      animation: msgIn 0.3s cubic-bezier(0.2, 0, 0, 1);
+    }
+    @keyframes msgIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+    .msg-avatar {
+      width: 26px; height: 26px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      flex-shrink: 0;
+      font-weight: 600;
+    }
+    .msg.assistant .msg-avatar {
+      background: oklch(from var(--panel-accent, var(--accent)) l c h / 0.14);
+      color: var(--panel-accent, var(--accent));
+    }
+    .msg.user .msg-avatar {
+      background: oklch(55% 0.12 250 / 0.12);
+      color: oklch(40% 0.08 250);
+    }
+    .msg-body {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .msg-text {
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .msg.assistant .msg-text {
+      background: oklch(96% 0.003 250);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+    .msg.user .msg-text {
+      background: var(--accent);
+      color: oklch(99% 0 0);
+      border: none;
+    }
+    .msg-meta {
+      font: 10px/1 var(--font-mono);
+      color: var(--muted);
+      padding: 0 4px;
+    }
+    .msg.user .msg-meta { text-align: right; }
+
+    /* typing indicator */
+    .typing-indicator {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      max-width: 92%;
+    }
+    .typing-dots {
+      display: flex;
+      gap: 4px;
+      padding: 12px 16px;
+      background: oklch(96% 0.003 250);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .typing-dots span {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      animation: dotPulse 1.2s infinite;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes dotPulse {
+      0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
+      30% { opacity: 1; transform: scale(1); }
+    }
+
+    /* panel muted state */
+    .panel-muted {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .panel-muted svg { opacity: 0.4; }
+    .panel-muted span {
+      font: 11px/1 var(--font-mono);
+      letter-spacing: 0.04em;
+    }
+
+    /* =========================================================
+       Unified input bar
+       ========================================================= */
+    .input-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+    }
+    .input-bar-label {
+      font: 10px/1 var(--font-mono);
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .input-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 40px;
+      padding: 0 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .input-wrap:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .input-wrap input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      font: 13px/1 var(--font-body);
+      color: var(--fg);
+      outline: none;
+    }
+    .input-wrap input::placeholder { color: var(--muted); }
+    .input-wrap .input-hint {
+      font: 10px/1 var(--font-mono);
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      user-select: none;
+    }
+    .send-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 40px;
+      padding: 0 20px;
+      border: none;
+      border-radius: var(--r);
+      background: var(--accent);
+      color: oklch(99% 0 0);
+      font: 12px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .send-btn:hover {
+      filter: brightness(1.08);
+      box-shadow: 0 2px 8px oklch(58% 0.16 145 / 0.3);
+    }
+    .send-btn:active { transform: scale(0.97); }
+    .send-btn.sending {
+      opacity: 0.7;
+      pointer-events: none;
+    }
+
+    /* quick actions */
+    .quick-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .quick-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px; height: 32px;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      background: var(--surface);
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .quick-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* =========================================================
+       Sent flash animation
+       ========================================================= */
+    @keyframes sentFlash {
+      0%   { box-shadow: inset 0 0 0 2px var(--accent); }
+      100% { box-shadow: inset 0 0 0 2px transparent; }
+    }
+    .panel.sent-flash {
+      animation: sentFlash 0.8s ease-out;
+    }
+
+    /* =========================================================
+       Site manager overlay
+       ========================================================= */
+    .mgr-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      justify-content: flex-end;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    .mgr-overlay.open {
+      pointer-events: auto;
+      opacity: 1;
+    }
+    .mgr-backdrop {
+      position: absolute;
+      inset: 0;
+      background: oklch(0% 0 0 / 0.4);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    .mgr-panel {
+      position: relative;
+      width: 460px;
+      max-width: 92vw;
+      height: 100%;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      box-shadow: -12px 0 40px oklch(0% 0 0 / 0.12);
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 1;
+    }
+    .mgr-overlay.open .mgr-panel {
+      transform: translateX(0);
+    }
+
+    /* Manager header */
+    .mgr-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .mgr-header h2 {
+      flex: 1;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--fg);
+    }
+    .mgr-header .count-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 20px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font: 11px/1 var(--font-mono);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .mgr-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px; height: 32px;
+      border: none;
+      border-radius: var(--r);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .mgr-close:hover {
+      background: oklch(0% 0 0 / 0.06);
+      color: var(--fg);
+    }
+
+    /* Site list */
+    .mgr-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .mgr-list::-webkit-scrollbar { width: 5px; }
+    .mgr-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    .mgr-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      transition: all 0.15s;
+    }
+    .mgr-item:hover {
+      border-color: oklch(from var(--accent) l c h / 0.3);
+      box-shadow: 0 2px 8px oklch(0% 0 0 / 0.06);
+    }
+    .mgr-item.disabled {
+      opacity: 0.45;
+    }
+    .mgr-item-color {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .mgr-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .mgr-item-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--fg);
+      line-height: 1.3;
+    }
+    .mgr-item-url {
+      font: 11px/1 var(--font-mono);
+      color: var(--muted);
+      margin-top: 2px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    /* Toggle switch */
+    .mgr-toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+    .mgr-toggle input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .mgr-toggle-track {
+      display: block;
+      width: 36px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--border);
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .mgr-toggle input:checked + .mgr-toggle-track {
+      background: var(--accent);
+    }
+    .mgr-toggle-track::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: white;
+      box-shadow: 0 1px 3px oklch(0% 0 0 / 0.15);
+      transition: transform 0.2s;
+    }
+    .mgr-toggle input:checked + .mgr-toggle-track::after {
+      transform: translateX(16px);
+    }
+
+    /* Item action buttons */
+    .mgr-item-actions {
+      display: flex;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .mgr-item-actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px; height: 28px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .mgr-item-actions button:hover {
+      background: oklch(0% 0 0 / 0.06);
+      color: var(--fg);
+    }
+    .mgr-item-actions button.delete-btn:hover {
+      background: oklch(55% 0.22 25 / 0.1);
+      color: var(--danger);
+    }
+
+    /* Add form at bottom */
+    .mgr-add-section {
+      flex-shrink: 0;
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      background: oklch(98% 0.003 250);
+    }
+    .mgr-add-title {
+      font: 11px/1 var(--font-mono);
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .mgr-add-form {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .mgr-add-row {
+      display: flex;
+      gap: 8px;
+    }
+    .mgr-input {
+      flex: 1;
+      height: 36px;
+      padding: 0 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      font: 12px/1 var(--font-body);
+      color: var(--fg);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .mgr-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .mgr-input::placeholder { color: var(--muted); }
+    .mgr-add-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 36px;
+      padding: 0 16px;
+      border: none;
+      border-radius: var(--r);
+      background: var(--accent);
+      color: oklch(99% 0 0);
+      font: 12px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .mgr-add-btn:hover {
+      filter: brightness(1.08);
+      box-shadow: 0 2px 8px oklch(58% 0.16 145 / 0.3);
+    }
+    .mgr-add-btn:active { transform: scale(0.97); }
+
+    /* Edit mode */
+    .mgr-item.editing {
+      background: oklch(98% 0.004 250);
+      border-color: var(--accent);
+    }
+    .mgr-edit-inputs {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+    }
+    .mgr-item.editing .mgr-edit-inputs {
+      display: flex;
+    }
+    .mgr-item.editing .mgr-item-info {
+      display: none;
+    }
+    .mgr-edit-input {
+      height: 30px;
+      padding: 0 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font: 12px/1 var(--font-body);
+      color: var(--fg);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .mgr-edit-input:focus {
+      border-color: var(--accent);
+    }
+    .mgr-edit-actions {
+      display: none;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .mgr-item.editing .mgr-edit-actions {
+      display: flex;
+    }
+    .mgr-item.editing .mgr-item-actions {
+      display: none;
+    }
+    .mgr-edit-actions button {
+      height: 28px;
+      padding: 0 10px;
+      border: none;
+      border-radius: 6px;
+      font: 11px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .mgr-save-btn {
+      background: var(--accent);
+      color: white;
+    }
+    .mgr-save-btn:hover { filter: brightness(1.08); }
+    .mgr-cancel-btn {
+      background: oklch(0% 0 0 / 0.06);
+      color: var(--muted);
+    }
+    .mgr-cancel-btn:hover {
+      background: oklch(0% 0 0 / 0.1);
+      color: var(--fg);
+    }
+
+    /* Empty state */
+    .mgr-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 40px 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .mgr-empty svg { opacity: 0.35; }
+    .mgr-empty p {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .mgr-empty span {
+      font: 11px/1 var(--font-mono);
+      letter-spacing: 0.04em;
+    }
+
+    /* =========================================================
+       Site editor — full-screen browser + config
+       ========================================================= */
+    .editor-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      background: var(--bg);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s;
+    }
+    .editor-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Left: browser area */
+    .editor-left {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      border-right: 1px solid var(--border);
+    }
+    .editor-url-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 44px;
+      padding: 0 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .editor-url-bar svg { flex-shrink: 0; color: var(--accent); }
+    .editor-url-text {
+      flex: 1;
+      font: 12px/1 var(--font-mono);
+      color: var(--fg);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .editor-url-status {
+      font: 11px/1 var(--font-mono);
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .editor-iframe-wrap {
+      flex: 1;
+      position: relative;
+      background: oklch(96% 0.003 250);
+    }
+    .editor-iframe-wrap iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: white;
+    }
+    .editor-iframe-fallback {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 40px;
+      text-align: center;
+      background: oklch(96% 0.003 250);
+    }
+    .editor-iframe-fallback.show { display: flex; }
+    .editor-iframe-fallback svg { opacity: 0.25; }
+    .editor-iframe-fallback p {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--muted);
+      max-width: 380px;
+    }
+    .sim-login-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 36px;
+      padding: 0 16px;
+      border: 1px solid var(--accent);
+      border-radius: var(--r);
+      background: var(--accent-dim);
+      color: var(--accent);
+      font: 12px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .sim-login-btn:hover {
+      background: oklch(58% 0.16 145 / 0.18);
+    }
+
+    /* Right: config panel */
+    .editor-right {
+      width: 420px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+    }
+    .editor-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .editor-header h2 {
+      flex: 1;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--fg);
+    }
+    .editor-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px; height: 32px;
+      border: none;
+      border-radius: var(--r);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .editor-close:hover {
+      background: oklch(0% 0 0 / 0.06);
+      color: var(--fg);
+    }
+    .editor-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .editor-body::-webkit-scrollbar { width: 5px; }
+    .editor-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+    .editor-section-label {
+      font: 11px/1 var(--font-mono);
+      color: var(--muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .editor-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .editor-field label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    .editor-field input[type="text"] {
+      height: 36px;
+      padding: 0 10px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      font: 12px/1 var(--font-body);
+      color: var(--fg);
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .editor-field input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+    .editor-color-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .editor-color-row input[type="color"] {
+      width: 40px;
+      height: 36px;
+      padding: 3px;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      cursor: pointer;
+      background: var(--surface);
+    }
+    .editor-color-hex {
+      font: 12px/1 var(--font-mono);
+      color: var(--muted);
+    }
+
+    /* Analyze button */
+    .editor-analyze-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      height: 42px;
+      border: 1px dashed var(--accent);
+      border-radius: var(--r);
+      background: var(--accent-dim);
+      color: var(--accent);
+      font: 13px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .editor-analyze-btn:hover {
+      background: oklch(58% 0.16 145 / 0.18);
+    }
+    .editor-analyze-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .editor-analyze-btn.analyzing {
+      border-style: solid;
+      pointer-events: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .editor-analyze-btn .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid oklch(58% 0.16 145 / 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    /* Analysis results */
+    .editor-results {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .editor-result {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      transition: all 0.2s;
+    }
+    .editor-result.found {
+      border-color: oklch(68% 0.16 145 / 0.4);
+    }
+    .editor-result.confirmed {
+      border-color: oklch(68% 0.16 145);
+      background: oklch(68% 0.16 145 / 0.05);
+    }
+    .editor-result-icon {
+      width: 28px; height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .editor-result-icon.waiting {
+      background: oklch(0% 0 0 / 0.06);
+      color: var(--muted);
+    }
+    .editor-result-icon.ok {
+      background: oklch(68% 0.16 145 / 0.12);
+      color: oklch(50% 0.16 145);
+    }
+    .editor-result-icon.done {
+      background: oklch(68% 0.16 145);
+      color: white;
+    }
+    .editor-result-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .editor-result-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg);
+      margin-bottom: 3px;
+    }
+    .editor-result-desc {
+      font: 11px/1.4 var(--font-mono);
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .editor-result-actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      align-self: center;
+    }
+    .editor-result-actions button {
+      height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+      font: 11px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.12s;
+      white-space: nowrap;
+    }
+    .editor-result-actions .confirm-btn {
+      border-color: oklch(68% 0.16 145);
+      color: oklch(50% 0.16 145);
+    }
+    .editor-result-actions .confirm-btn:hover {
+      background: oklch(68% 0.16 145 / 0.1);
+    }
+    .editor-result-actions .retry-btn:hover {
+      border-color: var(--fg);
+      color: var(--fg);
+    }
+
+    /* Editor footer */
+    .editor-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 14px 24px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .editor-save-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 36px;
+      padding: 0 20px;
+      border: none;
+      border-radius: var(--r);
+      background: var(--accent);
+      color: oklch(99% 0 0);
+      font: 13px/1 var(--font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .editor-save-btn:hover {
+      filter: brightness(1.08);
+      box-shadow: 0 2px 8px oklch(58% 0.16 145 / 0.3);
+    }
+    .editor-cancel-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 36px;
+      padding: 0 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      background: var(--surface);
+      color: var(--muted);
+      font: 13px/1 var(--font-body);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .editor-cancel-btn:hover {
+      border-color: var(--fg);
+      color: var(--fg);
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+
+    <!-- ── Header ── -->
+    <header class="header">
+      <div class="header-brand">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+          <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+        </svg>
+        AI 多开浏览器
+      </div>
+      <div class="header-sep"></div>
+      <div class="header-controls">
+        <button class="layout-btn active" data-cols="2" onclick="setLayout(2)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="18" rx="1"/><rect x="13" y="3" width="8" height="18" rx="1"/></svg>
+          2 列
+        </button>
+        <button class="layout-btn" data-cols="3" onclick="setLayout(3)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="5.5" height="18" rx="1"/><rect x="9.25" y="3" width="5.5" height="18" rx="1"/><rect x="16.5" y="3" width="5.5" height="18" rx="1"/></svg>
+          3 列
+        </button>
+      </div>
+      <div class="header-spacer"></div>
+      <div class="header-status">
+        <span class="status-dot"></span>
+        <span id="panel-count">4 个 AI 已连接</span>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" title="管理网站" onclick="openManager()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="icon-btn" title="设置">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ── Panel grid ── -->
+    <div class="grid cols-2" id="grid">
+
+      <!-- Panel 1: ChatGPT -->
+      <div class="panel" data-ai="chatgpt">
+        <div class="panel-bar">
+          <div class="panel-dots"><span></span><span></span><span></span></div>
+          <div class="panel-url">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            chat.openai.com
+          </div>
+          <div class="panel-actions">
+            <button title="刷新"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            <button title="展开"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+          </div>
+        </div>
+        <div class="panel-chat" id="chat-chatgpt">
+          <div class="msg assistant">
+            <div class="msg-avatar">G</div>
+            <div class="msg-body">
+              <div class="msg-text">你好！我是 ChatGPT，有什么可以帮你的？</div>
+              <div class="msg-meta">ChatGPT · 就绪</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 2: Claude -->
+      <div class="panel" data-ai="claude">
+        <div class="panel-bar">
+          <div class="panel-dots"><span></span><span></span><span></span></div>
+          <div class="panel-url">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            claude.ai
+          </div>
+          <div class="panel-actions">
+            <button title="刷新"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            <button title="展开"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+          </div>
+        </div>
+        <div class="panel-chat" id="chat-claude">
+          <div class="msg assistant">
+            <div class="msg-avatar">C</div>
+            <div class="msg-body">
+              <div class="msg-text">你好，我是 Claude。有什么我可以帮忙的吗？</div>
+              <div class="msg-meta">Claude · 就绪</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 3: Gemini -->
+      <div class="panel" data-ai="gemini">
+        <div class="panel-bar">
+          <div class="panel-dots"><span></span><span></span><span></span></div>
+          <div class="panel-url">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            gemini.google.com
+          </div>
+          <div class="panel-actions">
+            <button title="刷新"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            <button title="展开"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+          </div>
+        </div>
+        <div class="panel-chat" id="chat-gemini">
+          <div class="msg assistant">
+            <div class="msg-avatar">✦</div>
+            <div class="msg-body">
+              <div class="msg-text">Hi! I'm Gemini. How can I help you today?</div>
+              <div class="msg-meta">Gemini · Ready</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel 4: DeepSeek -->
+      <div class="panel" data-ai="deepseek">
+        <div class="panel-bar">
+          <div class="panel-dots"><span></span><span></span><span></span></div>
+          <div class="panel-url">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            chat.deepseek.com
+          </div>
+          <div class="panel-actions">
+            <button title="刷新"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            <button title="展开"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+          </div>
+        </div>
+        <div class="panel-chat" id="chat-deepseek">
+          <div class="msg assistant">
+            <div class="msg-avatar">D</div>
+            <div class="msg-body">
+              <div class="msg-text">你好，我是 DeepSeek，随时为你服务。</div>
+              <div class="msg-meta">DeepSeek · 就绪</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Unified input bar ── -->
+    <div class="input-bar">
+      <span class="input-bar-label">统一输入</span>
+      <div class="input-wrap">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="unified-input" placeholder="输入问题，同时发送到所有 AI..." autocomplete="off" />
+        <span class="input-hint">Enter ↵</span>
+      </div>
+      <div class="quick-actions">
+        <button class="quick-btn" title="清空所有对话" onclick="clearAll()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+      <button class="send-btn" id="send-btn" onclick="sendToAll()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        发送
+      </button>
+    </div>
+
+  </div>
+
+  <!-- ── Site manager overlay ── -->
+  <div class="mgr-overlay" id="mgr-overlay">
+    <div class="mgr-backdrop" onclick="closeManager()"></div>
+    <div class="mgr-panel">
+      <div class="mgr-header">
+        <h2>网站管理</h2>
+        <span class="count-badge" id="mgr-count">0</span>
+        <button class="mgr-close" onclick="closeManager()" title="关闭">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="mgr-list" id="mgr-list"></div>
+
+      <div class="mgr-add-section">
+        <div class="mgr-add-title">添加新网站</div>
+        <div class="mgr-add-form">
+          <div class="mgr-add-row">
+            <input class="mgr-input" id="add-name" type="text" placeholder="名称，例如：Kimi" />
+          </div>
+          <div class="mgr-add-row">
+            <input class="mgr-input" id="add-url" type="text" placeholder="网址，例如：kimi.moonshot.cn" />
+          </div>
+          <div class="mgr-add-row">
+            <input class="mgr-input" id="add-color" type="color" value="#6366f1" style="width:48px;padding:4px;cursor:pointer;" title="面板标识色" />
+            <button class="mgr-add-btn" onclick="addSite()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              添加
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Site editor overlay (full-screen) ── -->
+  <div class="editor-overlay" id="editor-overlay">
+    <div class="editor-left">
+      <div class="editor-url-bar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span class="editor-url-text" id="editor-url-text">—</span>
+        <span class="editor-url-status" id="editor-url-status">就绪</span>
+      </div>
+      <div class="editor-iframe-wrap">
+        <iframe id="editor-iframe" sandbox="allow-same-origin allow-scripts allow-forms allow-popups" src="about:blank"></iframe>
+        <div class="editor-iframe-fallback" id="editor-fallback">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <p>此网站可能不允许在框架中加载。<br>在 Electron 应用中，将使用 webview 组件直接访问。</p>
+          <button class="sim-login-btn" onclick="simulateLogin()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            模拟登录完成
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="editor-right">
+      <div class="editor-header">
+        <h2 id="editor-title">编辑网站</h2>
+        <button class="editor-close" onclick="closeEditor()" title="关闭">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+
+      <div class="editor-body">
+        <!-- Basic config -->
+        <div>
+          <div class="editor-section-label">基本信息</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div class="editor-field">
+              <label>名称</label>
+              <input type="text" id="editor-name" placeholder="例如：ChatGPT" />
+            </div>
+            <div class="editor-field">
+              <label>网址</label>
+              <input type="text" id="editor-url-input" placeholder="例如：chat.openai.com" />
+            </div>
+            <div class="editor-field">
+              <label>标识色</label>
+              <div class="editor-color-row">
+                <input type="color" id="editor-color" value="#6366f1" />
+                <span class="editor-color-hex" id="editor-color-hex">#6366f1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Auto analyze -->
+        <div>
+          <div class="editor-section-label">自动分析</div>
+          <button class="editor-analyze-btn" id="analyze-btn" onclick="autoAnalyze()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            自动分析页面元素
+          </button>
+        </div>
+
+        <!-- Results -->
+        <div>
+          <div class="editor-section-label">分析结果</div>
+          <div class="editor-results">
+            <div class="editor-result" id="result-cookie">
+              <div class="editor-result-icon waiting">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              </div>
+              <div class="editor-result-info">
+                <div class="editor-result-title">登录 Cookie</div>
+                <div class="editor-result-desc" id="result-cookie-desc">等待分析...</div>
+              </div>
+            </div>
+
+            <div class="editor-result" id="result-input">
+              <div class="editor-result-icon waiting">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="9" x2="7" y2="9.01"/></svg>
+              </div>
+              <div class="editor-result-info">
+                <div class="editor-result-title">输入框控件</div>
+                <div class="editor-result-desc" id="result-input-desc">等待分析...</div>
+              </div>
+              <div class="editor-result-actions" id="result-input-actions" style="display:none;">
+                <button class="confirm-btn" onclick="confirmSelector('input')">✓ 准确</button>
+                <button class="retry-btn" onclick="autoAnalyze()">重新定位</button>
+              </div>
+            </div>
+
+            <div class="editor-result" id="result-send">
+              <div class="editor-result-icon waiting">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </div>
+              <div class="editor-result-info">
+                <div class="editor-result-title">发送按钮控件</div>
+                <div class="editor-result-desc" id="result-send-desc">等待分析...</div>
+              </div>
+              <div class="editor-result-actions" id="result-send-actions" style="display:none;">
+                <button class="confirm-btn" onclick="confirmSelector('send')">✓ 准确</button>
+                <button class="retry-btn" onclick="autoAnalyze()">重新定位</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="editor-footer">
+        <button class="editor-cancel-btn" onclick="closeEditor()">取消</button>
+        <button class="editor-save-btn" onclick="saveEditor()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+          保存配置
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ── State ── */
+    let currentCols = 2;
+
+    /* ── Layout switch ── */
+    function setLayout(cols) {
+      currentCols = cols;
+      const grid = document.getElementById('grid');
+      grid.classList.remove('cols-2', 'cols-3');
+      grid.classList.add('cols-' + cols);
+
+      document.querySelectorAll('.layout-btn').forEach(btn => {
+        btn.classList.toggle('active', parseInt(btn.dataset.cols) === cols);
+      });
+
+      // Update panel count display
+      const count = document.querySelectorAll('.panel').length;
+      document.getElementById('panel-count').textContent = count + ' 个 AI 已连接';
+    }
+
+    /* ── AI response simulation ── */
+    const responses = {
+      chatgpt: [
+        '这是一个很好的问题。让我从几个角度来分析...',
+        '根据我的理解，这个问题的核心在于...',
+        '我来给你一个结构化的回答：',
+        '这个问题可以从技术和实践两个层面来看。'
+      ],
+      claude: [
+        '这是个有趣的问题，让我仔细思考一下。',
+        '我认为可以从以下几个维度来理解这个问题：',
+        '让我尝试用一个清晰的框架来回答。',
+        '这个问题涉及多个层面，我来逐一展开。'
+      ],
+      gemini: [
+        'Great question! Let me think about this...',
+        'Here\'s my take on this topic:',
+        'I\'d approach this from a few different angles.',
+        'Let me break this down for you.'
+      ],
+      deepseek: [
+        '好的，我来为你详细解答。',
+        '这是一个值得深入探讨的话题。',
+        '让我从数据和逻辑的角度来分析。',
+        '以下是我的分析思路：'
+      ]
+    };
+
+    function getRandomResponse(ai) {
+      const pool = responses[ai] || responses.chatgpt;
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
+    /* ── Send message to all panels ── */
+    function sendToAll() {
+      const input = document.getElementById('unified-input');
+      const text = input.value.trim();
+      if (!text) return;
+
+      const sendBtn = document.getElementById('send-btn');
+      sendBtn.classList.add('sending');
+
+      const panels = document.querySelectorAll('.panel');
+      let delay = 0;
+
+      panels.forEach(panel => {
+        const ai = panel.dataset.ai;
+        const chatEl = document.getElementById('chat-' + ai);
+        if (!chatEl) return;
+
+        // Flash panel
+        panel.classList.remove('sent-flash');
+        void panel.offsetWidth; // reflow
+        panel.classList.add('sent-flash');
+
+        // Add user message
+        setTimeout(() => {
+          const userMsg = document.createElement('div');
+          userMsg.className = 'msg user';
+          userMsg.innerHTML = `
+            <div class="msg-avatar">你</div>
+            <div class="msg-body">
+              <div class="msg-text">${escapeHtml(text)}</div>
+              <div class="msg-meta">已发送</div>
+            </div>
+          `;
+          chatEl.appendChild(userMsg);
+          chatEl.scrollTop = chatEl.scrollHeight;
+
+          // Add typing indicator
+          const typing = document.createElement('div');
+          typing.className = 'typing-indicator';
+          typing.id = 'typing-' + ai;
+          typing.innerHTML = `
+            <div class="msg-avatar" style="background:var(--accent-dim);color:var(--accent);font-weight:600;">${ai === 'gemini' ? '✦' : ai.charAt(0).toUpperCase()}</div>
+            <div class="typing-dots"><span></span><span></span><span></span></div>
+          `;
+          chatEl.appendChild(typing);
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }, delay);
+
+        // Replace typing with response
+        const responseDelay = 800 + Math.random() * 1200;
+        setTimeout(() => {
+          const typingEl = document.getElementById('typing-' + ai);
+          if (typingEl) typingEl.remove();
+
+          const aiMsg = document.createElement('div');
+          aiMsg.className = 'msg assistant';
+          aiMsg.innerHTML = `
+            <div class="msg-avatar">${ai === 'gemini' ? '✦' : ai.charAt(0).toUpperCase()}</div>
+            <div class="msg-body">
+              <div class="msg-text">${getRandomResponse(ai)}</div>
+              <div class="msg-meta">${ai === 'chatgpt' ? 'ChatGPT' : ai === 'claude' ? 'Claude' : ai === 'gemini' ? 'Gemini' : 'DeepSeek'} · ${new Date().toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit'})}</div>
+            </div>
+          `;
+          chatEl.appendChild(aiMsg);
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }, delay + responseDelay);
+
+        delay += 100;
+      });
+
+      // Reset input
+      setTimeout(() => {
+        input.value = '';
+        sendBtn.classList.remove('sending');
+        input.focus();
+      }, 200);
+    }
+
+    /* ── Clear all chats ── */
+    function clearAll() {
+      const greetings = {
+        chatgpt: { avatar: 'G', name: 'ChatGPT', text: '你好！我是 ChatGPT，有什么可以帮你的？' },
+        claude:  { avatar: 'C', name: 'Claude',  text: '你好，我是 Claude。有什么我可以帮忙的吗？' },
+        gemini:  { avatar: '✦', name: 'Gemini',  text: 'Hi! I\'m Gemini. How can I help you today?' },
+        deepseek:{ avatar: 'D', name: 'DeepSeek', text: '你好，我是 DeepSeek，随时为你服务。' }
+      };
+
+      Object.keys(greetings).forEach(ai => {
+        const chatEl = document.getElementById('chat-' + ai);
+        if (!chatEl) return;
+        const g = greetings[ai];
+        chatEl.innerHTML = `
+          <div class="msg assistant">
+            <div class="msg-avatar">${g.avatar}</div>
+            <div class="msg-body">
+              <div class="msg-text">${g.text}</div>
+              <div class="msg-meta">${g.name} · 就绪</div>
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    /* ── Helpers ── */
+    function escapeHtml(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    /* ── Keyboard ── */
+    document.getElementById('unified-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendToAll();
+      }
+    });
+
+    /* ── Focus input on load ── */
+    window.addEventListener('load', function() {
+      document.getElementById('unified-input').focus();
+    });
+
+    /* =========================================================
+       Site manager
+       ========================================================= */
+    const SITE_STORE_KEY = 'ai-browser-sites';
+
+    /* Default sites matching the current panels */
+    const DEFAULT_SITES = [
+      { id: 'chatgpt',  name: 'ChatGPT',  url: 'chat.openai.com',   color: '#10a37f', enabled: true, cookie: null, inputSelector: null, sendSelector: null, inputConfirmed: false, sendConfirmed: false },
+      { id: 'claude',   name: 'Claude',    url: 'claude.ai',         color: '#d97706', enabled: true, cookie: null, inputSelector: null, sendSelector: null, inputConfirmed: false, sendConfirmed: false },
+      { id: 'gemini',   name: 'Gemini',    url: 'gemini.google.com', color: '#4285f4', enabled: true, cookie: null, inputSelector: null, sendSelector: null, inputConfirmed: false, sendConfirmed: false },
+      { id: 'deepseek', name: 'DeepSeek',  url: 'chat.deepseek.com', color: '#6366f1', enabled: true, cookie: null, inputSelector: null, sendSelector: null, inputConfirmed: false, sendConfirmed: false },
+    ];
+
+    let sites = loadSites();
+
+    function loadSites() {
+      try {
+        const raw = localStorage.getItem(SITE_STORE_KEY);
+        if (raw) {
+          return JSON.parse(raw).map(s => ({
+            cookie: null, inputSelector: null, sendSelector: null,
+            inputConfirmed: false, sendConfirmed: false, ...s
+          }));
+        }
+      } catch (_) {}
+      return DEFAULT_SITES.map(s => ({ ...s }));
+    }
+
+    function saveSites() {
+      try { localStorage.setItem(SITE_STORE_KEY, JSON.stringify(sites)); } catch (_) {}
+    }
+
+    function genId() {
+      return 'site-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+
+    /* =========================================================
+       Site editor (full-screen browser + config)
+       ========================================================= */
+    let editingSiteId = null;
+
+    function openEditor(siteId) {
+      const site = sites.find(s => s.id === siteId);
+      if (!site) return;
+      editingSiteId = siteId;
+
+      document.getElementById('editor-title').textContent = '编辑 · ' + site.name;
+      document.getElementById('editor-name').value = site.name;
+      document.getElementById('editor-url-input').value = site.url;
+      document.getElementById('editor-color').value = site.color;
+      document.getElementById('editor-color-hex').textContent = site.color;
+
+      const fullUrl = site.url.startsWith('http') ? site.url : 'https://' + site.url;
+      document.getElementById('editor-url-text').textContent = fullUrl;
+      document.getElementById('editor-url-status').textContent = '加载中...';
+
+      const iframe = document.getElementById('editor-iframe');
+      const fallback = document.getElementById('editor-fallback');
+      fallback.classList.remove('show');
+      iframe.src = fullUrl;
+
+      // Show fallback after timeout if iframe blocked
+      setTimeout(() => {
+        if (editingSiteId === siteId) {
+          fallback.classList.add('show');
+          document.getElementById('editor-url-status').textContent = '可能被阻止';
+        }
+      }, 3000);
+
+      resetResults(site);
+      document.getElementById('editor-overlay').classList.add('open');
+    }
+
+    function closeEditor() {
+      document.getElementById('editor-overlay').classList.remove('open');
+      document.getElementById('editor-iframe').src = 'about:blank';
+      editingSiteId = null;
+    }
+
+    function resetResults(site) {
+      const cookieEl = document.getElementById('result-cookie');
+      const cookieDesc = document.getElementById('result-cookie-desc');
+      if (site.cookie) {
+        cookieEl.className = 'editor-result found';
+        cookieEl.querySelector('.editor-result-icon').className = 'editor-result-icon ok';
+        cookieDesc.textContent = site.cookie.length > 50 ? site.cookie.substring(0, 50) + '...' : site.cookie;
+      } else {
+        cookieEl.className = 'editor-result';
+        cookieEl.querySelector('.editor-result-icon').className = 'editor-result-icon waiting';
+        cookieDesc.textContent = '等待分析...';
+      }
+
+      const inputEl = document.getElementById('result-input');
+      const inputDesc = document.getElementById('result-input-desc');
+      const inputActions = document.getElementById('result-input-actions');
+      if (site.inputSelector) {
+        inputEl.className = 'editor-result' + (site.inputConfirmed ? ' confirmed' : ' found');
+        inputEl.querySelector('.editor-result-icon').className = 'editor-result-icon ' + (site.inputConfirmed ? 'done' : 'ok');
+        inputDesc.textContent = site.inputSelector;
+        inputActions.style.display = site.inputConfirmed ? 'none' : 'flex';
+      } else {
+        inputEl.className = 'editor-result';
+        inputEl.querySelector('.editor-result-icon').className = 'editor-result-icon waiting';
+        inputDesc.textContent = '等待分析...';
+        inputActions.style.display = 'none';
+      }
+
+      const sendEl = document.getElementById('result-send');
+      const sendDesc = document.getElementById('result-send-desc');
+      const sendActions = document.getElementById('result-send-actions');
+      if (site.sendSelector) {
+        sendEl.className = 'editor-result' + (site.sendConfirmed ? ' confirmed' : ' found');
+        sendEl.querySelector('.editor-result-icon').className = 'editor-result-icon ' + (site.sendConfirmed ? 'done' : 'ok');
+        sendDesc.textContent = site.sendSelector;
+        sendActions.style.display = site.sendConfirmed ? 'none' : 'flex';
+      } else {
+        sendEl.className = 'editor-result';
+        sendEl.querySelector('.editor-result-icon').className = 'editor-result-icon waiting';
+        sendDesc.textContent = '等待分析...';
+        sendActions.style.display = 'none';
+      }
+    }
+
+    function autoAnalyze() {
+      const site = sites.find(s => s.id === editingSiteId);
+      if (!site) return;
+
+      const btn = document.getElementById('analyze-btn');
+      btn.disabled = true;
+      btn.classList.add('analyzing');
+      btn.innerHTML = '<span class="spinner"></span> 正在分析页面元素...';
+
+      setTimeout(() => {
+        const mockSelectors = {
+          'chatgpt':  { input: 'textarea#prompt-textarea',                    send: 'button[data-testid="send-button"]' },
+          'claude':   { input: 'div[contenteditable="true"].ProseMirror',     send: 'button[aria-label="Send Message"]' },
+          'gemini':   { input: 'div.ql-editor[contenteditable="true"]',       send: 'button.send-button' },
+          'deepseek': { input: 'textarea#chat-input',                         send: 'button.btn-send' },
+        };
+        const mock = mockSelectors[site.id] || {
+          input: 'textarea, div[contenteditable="true"]',
+          send: 'button[type="submit"], button.send-btn'
+        };
+
+        site.cookie = 'session_' + site.id + '=' + Math.random().toString(36).slice(2, 10) + '; _token=' + Math.random().toString(36).slice(2, 14);
+        site.inputSelector = mock.input;
+        site.sendSelector = mock.send;
+        site.inputConfirmed = false;
+        site.sendConfirmed = false;
+        saveSites();
+        resetResults(site);
+
+        btn.disabled = false;
+        btn.classList.remove('analyzing');
+        btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> 重新分析';
+      }, 2000);
+    }
+
+    function confirmSelector(type) {
+      const site = sites.find(s => s.id === editingSiteId);
+      if (!site) return;
+      if (type === 'input') site.inputConfirmed = true;
+      if (type === 'send') site.sendConfirmed = true;
+      saveSites();
+      resetResults(site);
+    }
+
+    function simulateLogin() {
+      const site = sites.find(s => s.id === editingSiteId);
+      if (!site) return;
+      document.getElementById('editor-fallback').classList.remove('show');
+      document.getElementById('editor-url-status').textContent = '已登录';
+      site.cookie = 'session_' + site.id + '_logged_in=' + Math.random().toString(36).slice(2, 10);
+      saveSites();
+      resetResults(site);
+    }
+
+    function saveEditor() {
+      const site = sites.find(s => s.id === editingSiteId);
+      if (!site) return;
+      const newName = document.getElementById('editor-name').value.trim();
+      const newUrl = document.getElementById('editor-url-input').value.trim();
+      const newColor = document.getElementById('editor-color').value;
+      if (!newName || !newUrl) return;
+      site.name = newName;
+      site.url = newUrl;
+      site.color = newColor;
+      saveSites();
+      rebuildPanels();
+      closeEditor();
+    }
+
+    document.getElementById('editor-color').addEventListener('input', function() {
+      document.getElementById('editor-color-hex').textContent = this.value;
+    });
+
+    document.getElementById('editor-iframe').addEventListener('load', function() {
+      if (editingSiteId) {
+        document.getElementById('editor-url-status').textContent = '已加载';
+        document.getElementById('editor-fallback').classList.remove('show');
+      }
+    });
+
+    /* =========================================================
+       Add site (from manager panel)
+       ========================================================= */
+    function addSite() {
+      const nameInput = document.getElementById('add-name');
+      const urlInput = document.getElementById('add-url');
+      const colorInput = document.getElementById('add-color');
+      const name = nameInput.value.trim();
+      const url = urlInput.value.trim();
+      if (!name || !url) { if (!name) nameInput.focus(); else urlInput.focus(); return; }
+      sites.push({
+        id: genId(), name, url,
+        color: colorInput.value, enabled: true,
+        cookie: null, inputSelector: null, sendSelector: null,
+        inputConfirmed: false, sendConfirmed: false,
+      });
+      saveSites();
+      nameInput.value = '';
+      urlInput.value = '';
+      renderMgrList();
+      rebuildPanels();
+    }
+
+    document.getElementById('add-name').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') document.getElementById('add-url').focus();
+    });
+    document.getElementById('add-url').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') addSite();
+    });
+
+    /* =========================================================
+       Manager overlay — full CRUD + toggle
+       ========================================================= */
+    function openManager() {
+      renderMgrList();
+      document.getElementById('mgr-overlay').classList.add('open');
+      document.getElementById('add-name').focus();
+    }
+    function closeManager() {
+      document.getElementById('mgr-overlay').classList.remove('open');
+    }
+
+    function renderMgrList() {
+      const list = document.getElementById('mgr-list');
+      const badge = document.getElementById('mgr-count');
+      badge.textContent = sites.length;
+
+      if (sites.length === 0) {
+        list.innerHTML = `
+          <div class="mgr-empty">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+            <p>还没有添加任何网站</p>
+            <span>在下方输入网址开始</span>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = sites.map(site => `
+        <div class="mgr-item${site.enabled ? '' : ' disabled'}" data-id="${site.id}" id="mgr-item-${site.id}">
+          <span class="mgr-item-color" style="background:${site.color};"></span>
+          <div class="mgr-item-info">
+            <div class="mgr-item-name">${escapeHtml(site.name)}</div>
+            <div class="mgr-item-url">${escapeHtml(site.url)}</div>
+          </div>
+          <div class="mgr-edit-inputs" id="mgr-edit-${site.id}">
+            <input class="mgr-edit-input" id="mgr-edit-name-${site.id}" value="${escapeHtml(site.name)}" placeholder="名称" />
+            <input class="mgr-edit-input" id="mgr-edit-url-${site.id}" value="${escapeHtml(site.url)}" placeholder="网址" />
+          </div>
+          <label class="mgr-toggle" title="${site.enabled ? '点击禁用' : '点击启用'}">
+            <input type="checkbox" ${site.enabled ? 'checked' : ''} onchange="toggleSite('${site.id}')" />
+            <span class="mgr-toggle-track"></span>
+          </label>
+          <div class="mgr-item-actions">
+            <button title="编辑" onclick="startEdit('${site.id}')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button class="delete-btn" title="删除" onclick="deleteSite('${site.id}')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+          </div>
+          <div class="mgr-edit-actions" id="mgr-edit-actions-${site.id}">
+            <button class="mgr-save-btn" onclick="saveEdit('${site.id}')">保存</button>
+            <button class="mgr-cancel-btn" onclick="cancelEdit('${site.id}')">取消</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function toggleSite(id) {
+      const site = sites.find(s => s.id === id);
+      if (!site) return;
+      site.enabled = !site.enabled;
+      saveSites();
+      renderMgrList();
+      rebuildPanels();
+    }
+
+    function startEdit(id) {
+      const item = document.getElementById('mgr-item-' + id);
+      if (!item) return;
+      item.classList.add('editing');
+      const nameInput = document.getElementById('mgr-edit-name-' + id);
+      if (nameInput) nameInput.focus();
+    }
+
+    function saveEdit(id) {
+      const site = sites.find(s => s.id === id);
+      if (!site) return;
+      const nameInput = document.getElementById('mgr-edit-name-' + id);
+      const urlInput = document.getElementById('mgr-edit-url-' + id);
+      const newName = nameInput.value.trim();
+      const newUrl = urlInput.value.trim();
+      if (!newName || !newUrl) return;
+      site.name = newName;
+      site.url = newUrl;
+      saveSites();
+      renderMgrList();
+      rebuildPanels();
+    }
+
+    function cancelEdit(id) {
+      renderMgrList();
+    }
+
+    function deleteSite(id) {
+      const site = sites.find(s => s.id === id);
+      if (!site) return;
+      if (!confirm('确定删除「' + site.name + '」？')) return;
+      sites = sites.filter(s => s.id !== id);
+      saveSites();
+      renderMgrList();
+      rebuildPanels();
+    }
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeEditor();
+        closeManager();
+      }
+    });
+
+    /* ── Rebuild panels from site data ── */
+    function rebuildPanels() {
+      const grid = document.getElementById('grid');
+      const enabledSites = sites.filter(s => s.enabled);
+
+      grid.innerHTML = enabledSites.map(site => `
+        <div class="panel" data-ai="${site.id}" style="--panel-accent: ${site.color};">
+          <div class="panel-bar" style="border-top-color: ${site.color};">
+            <div class="panel-dots"><span></span><span></span><span></span></div>
+            <div class="panel-url">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              ${escapeHtml(site.url)}
+            </div>
+            <div class="panel-actions">
+              <button title="编辑配置" onclick="openEditor('${site.id}')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button title="刷新"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+              <button title="展开"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+            </div>
+          </div>
+          <div class="panel-chat" id="chat-${site.id}">
+            <div class="msg assistant">
+              <div class="msg-avatar" style="background:${site.color}22;color:${site.color};font-weight:600;">${site.name.charAt(0)}</div>
+              <div class="msg-body">
+                <div class="msg-text">你好，我是 ${escapeHtml(site.name)}，随时为你服务。</div>
+                <div class="msg-meta">${escapeHtml(site.name)} · 就绪</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      document.getElementById('panel-count').textContent = enabledSites.length + ' 个 AI 已连接';
+      setLayout(currentCols || 2);
+    }
+
+    /* ── Init ── */
+    rebuildPanels();
+  </script>
+</body>
+</html>
